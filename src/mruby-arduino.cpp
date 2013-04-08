@@ -4,25 +4,40 @@
 #include "mruby/string.h"
 #include "mruby/data.h"
 
-#if (ARDUINO >= 100)
-	#include <Arduino.h>
-#else
-	#include <WProgram.h>
-#endif
-
-#include <Servo/Servo.h>
+#include <rxduino.h>
 
 mrb_value mrb_serial_available(mrb_state *mrb, mrb_value self){
   return mrb_fixnum_value(Serial.available());
 }
 
 mrb_value mrb_serial_begin(mrb_state *mrb, mrb_value self){
-  mrb_int speed = 0;
-  int n = mrb_get_args(mrb,"i",&speed);
-  Serial.begin(speed);
+  mrb_int speed = 0, port;
+  int n = mrb_get_args(mrb,"i|i",&speed, &port);
+  if (n == 2) {
+    switch(port) {
+    case SCI_SCI0P2x:
+      Serial.begin(speed, SCI_SCI0P2x);
+      break;
+    default:
+      break;
+    }
+  } else {
+    Serial.begin(speed);
+  }
   return mrb_nil_value();
 }
 
+
+mrb_value mrb_serial_read(mrb_state *mrb, mrb_value self){
+  return mrb_fixnum_value(Serial.read());
+}
+
+mrb_value mrb_serial_print(mrb_state *mrb, mrb_value self){
+  mrb_value s;
+  mrb_get_args(mrb,"S", &s);
+  Serial.print(RSTRING_PTR(s));
+  return mrb_nil_value();
+}
 
 mrb_value mrb_serial_println(mrb_state *mrb, mrb_value self){
   mrb_value s;
@@ -31,41 +46,6 @@ mrb_value mrb_serial_println(mrb_state *mrb, mrb_value self){
   return mrb_nil_value();
 }
 
-void mrb_servo_free(mrb_state *mrb, void *ptr){
-  delete (Servo *)ptr;
-}
-
-struct mrb_data_type mrb_servo_type = {"Servo", mrb_servo_free};
-
-mrb_value mrb_servo_initialize(mrb_state *mrb, mrb_value self){
-  Servo *newServo = new Servo();
-  DATA_PTR(self) = newServo;  
-  DATA_TYPE(self) = &mrb_servo_type;  
-  return self;
-}
-
-mrb_value mrb_servo_attach(mrb_state *mrb, mrb_value self){
-  Servo *servo = (Servo *)mrb_get_datatype(mrb, self, &mrb_servo_type);
-  
-  mrb_int pin = 0;
-  int n = mrb_get_args(mrb, "i", &pin);
-  servo->attach(pin);
-  return mrb_nil_value();
-}
-
-mrb_value mrb_servo_write(mrb_state *mrb, mrb_value self){
-  Servo *servo = (Servo *)mrb_get_datatype(mrb, self, &mrb_servo_type);
-  mrb_int angle = 0;
-  int n = mrb_get_args(mrb, "i", &angle);
-  servo->write(angle);
-  return mrb_nil_value();
-}
-
-mrb_value mrb_servo_detach(mrb_state *mrb, mrb_value self){
-  Servo *servo = (Servo *)mrb_get_datatype(mrb, self, &mrb_servo_type);
-  servo->detach();
-  return mrb_nil_value();
-}
 
 
 mrb_value mrb_arduino_pinMode(mrb_state *mrb, mrb_value self){
@@ -133,17 +113,6 @@ mrb_value mrb_arduino_shiftOut(mrb_state *mrb, mrb_value self){
   int n = mrb_get_args(mrb, "iiii", &dataPin, &clockPin, &bitOrder, &value);
   shiftOut(dataPin, clockPin, bitOrder, (byte)value);
   return mrb_nil_value();
-}
-
-#if defined(MPIDE) && MPIDE <= 23
-  //seems like MPIDE does not define shiftIn.
-  extern uint8_t shiftIn(uint8_t dataPin, uint8_t clockPin, uint8_t bitOrder);
-#endif
-
-mrb_value mrb_arduino_shiftIn(mrb_state *mrb, mrb_value self){
-  mrb_int dataPin, clockPin, bitOrder;
-  int n = mrb_get_args(mrb, "iii", &dataPin, &clockPin, &bitOrder);
-  return mrb_fixnum_value(shiftIn(dataPin, clockPin, bitOrder));
 }
  
 mrb_value mrb_arduino_pulseIn(mrb_state *mrb, mrb_value self){
@@ -223,15 +192,11 @@ mrb_mruby_arduino_gem_init(mrb_state* mrb) {
 
   RClass *serialClass = mrb_define_class(mrb, "Serial", mrb->object_class);
   mrb_define_class_method(mrb, serialClass, "available", mrb_serial_available, ARGS_NONE());
-  mrb_define_class_method(mrb, serialClass, "begin",mrb_serial_begin, ARGS_REQ(1));
+  mrb_define_class_method(mrb, serialClass, "begin", mrb_serial_begin, ARGS_REQ(1) | ARGS_OPT(1));
   mrb_define_class_method(mrb, serialClass, "println", mrb_serial_println, ARGS_REQ(1));
+  mrb_define_class_method(mrb, serialClass, "print", mrb_serial_print, ARGS_REQ(1));
+  mrb_define_class_method(mrb, serialClass, "read", mrb_serial_read, ARGS_NONE());
 
-  RClass *servoClass = mrb_define_class(mrb, "Servo", mrb->object_class);
-  MRB_SET_INSTANCE_TT(servoClass, MRB_TT_DATA);
-  mrb_define_method(mrb, servoClass, "initialize", mrb_servo_initialize, ARGS_NONE());
-  mrb_define_method(mrb, servoClass, "attach", mrb_servo_attach, ARGS_REQ(1));
-  mrb_define_method(mrb, servoClass, "write", mrb_servo_write, ARGS_REQ(1));
-  mrb_define_method(mrb, servoClass, "detach", mrb_servo_detach, ARGS_NONE());
   
   RClass *arduinoModule = mrb_define_module(mrb, "Arduino");
   mrb_define_module_function(mrb, arduinoModule, "pinMode", mrb_arduino_pinMode, ARGS_REQ(2));
@@ -243,7 +208,7 @@ mrb_mruby_arduino_gem_init(mrb_state* mrb) {
   mrb_define_module_function(mrb, arduinoModule, "tone", mrb_arduino_tone, ARGS_REQ(2) | ARGS_OPT(1));
   mrb_define_module_function(mrb, arduinoModule, "noTone", mrb_arduino_noTone, ARGS_REQ(1));
   mrb_define_module_function(mrb, arduinoModule, "shiftOut", mrb_arduino_shiftOut, ARGS_REQ(4));
-  mrb_define_module_function(mrb, arduinoModule, "shiftIn", mrb_arduino_shiftOut, ARGS_REQ(3));
+
   mrb_define_module_function(mrb, arduinoModule, "pulseIn", mrb_arduino_pulseIn, ARGS_REQ(2) | ARGS_OPT(1));
   mrb_define_module_function(mrb, arduinoModule, "millis", mrb_arduino_millis, ARGS_NONE());
   mrb_define_module_function(mrb, arduinoModule, "micros", mrb_arduino_micros, ARGS_NONE());
@@ -259,6 +224,14 @@ mrb_mruby_arduino_gem_init(mrb_state* mrb) {
   mrb_define_const(mrb, arduinoModule, "LOW", mrb_fixnum_value(LOW));
   mrb_define_const(mrb, arduinoModule, "INPUT", mrb_fixnum_value(INPUT));
   mrb_define_const(mrb, arduinoModule, "OUTPUT", mrb_fixnum_value(OUTPUT));
+
+  //serial
+  mrb_define_const(mrb, arduinoModule, "SCI_SCI0P2x", mrb_fixnum_value(SCI_SCI0P2x));
+  // mrb_define_const(mrb, arduinoModule, "USB", mrb_fixnum_value(USB));
+
+
+
+
 
 #ifdef INPUT_PULLUP
   mrb_define_const(mrb, arduinoModule, "INPUT_PULLUP", mrb_fixnum_value(INPUT_PULLUP));
